@@ -1,155 +1,164 @@
-<form action="index.php" method="POST">
+<?php
+declare(strict_types=1);
 
-    <input type="text" name="ndp"
-    placeholder="nome do produto"/><br/>
-    <br/>
-    <select name="op">
-        <option value="s1">setor 1</option>
-        <option value="s2">setor 2</option>
-        <option value="s3">setor 3</option>
-        <option value="s4">setor 4</option>
-    </select><br/>
-    <br/>
-    <input type="text" name="pdc"
-    placeholder="preço de custo"/><br/>
-    <br/>
-    <input type="text" name="pdv"
-    placeholder="preço de venda"/><br/>
-    <br/>
-    <input type="number" name="estoque"
-    placeholder="estoque"/><br/>
-    <br/>
-    <input type="submit" name="grava"
-    value="Gravar"/>
+require __DIR__ . '/conn.php';
+
+const SECTORS = ['s1', 's2', 's3', 's4'];
+
+function decimalValue(mixed $value): ?string
+{
+    $text = trim((string) $value);
+    return preg_match('/^\d{1,8}(?:\.\d{1,2})?$/', $text) === 1 ? $text : null;
+}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $token = (string) ($_POST['csrf_token'] ?? '');
+    if (!hash_equals($_SESSION['csrf_token'], $token)) {
+        http_response_code(403);
+        exit('Invalid CSRF token.');
+    }
+
+    $action = (string) ($_POST['action'] ?? '');
+    if ($action === 'delete') {
+        $id = filter_input(INPUT_POST, 'id', FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]);
+        if ($id === false || $id === null) {
+            redirectWithMessage('Invalid product identifier.');
+        }
+
+        $statement = $conn->prepare('DELETE FROM products WHERE id = :id');
+        $statement->execute(['id' => $id]);
+        redirectWithMessage('Product deleted.');
+    }
+
+    if ($action === 'save') {
+        $idText = trim((string) ($_POST['id'] ?? ''));
+        $id = $idText === '' ? null : filter_var($idText, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 1],
+        ]);
+        $name = trim((string) ($_POST['name'] ?? ''));
+        $sector = (string) ($_POST['sector'] ?? '');
+        $cost = decimalValue($_POST['cost'] ?? null);
+        $salePrice = decimalValue($_POST['sale_price'] ?? null);
+        $stock = filter_var($_POST['stock'] ?? null, FILTER_VALIDATE_INT, [
+            'options' => ['min_range' => 0, 'max_range' => 999999],
+        ]);
+
+        if (($idText !== '' && $id === false)
+            || $name === ''
+            || mb_strlen($name) > 80
+            || !in_array($sector, SECTORS, true)
+            || $cost === null
+            || $salePrice === null
+            || $stock === false) {
+            redirectWithMessage('Check all product fields and try again.');
+        }
+
+        $parameters = [
+            'cost' => $cost,
+            'name' => $name,
+            'sale_price' => $salePrice,
+            'sector' => $sector,
+            'stock' => $stock,
+        ];
+
+        if ($id === null) {
+            $statement = $conn->prepare(
+                'INSERT INTO products (name, sector, cost, sale_price, stock) '
+                . 'VALUES (:name, :sector, :cost, :sale_price, :stock)'
+            );
+            $message = 'Product created.';
+        } else {
+            $statement = $conn->prepare(
+                'UPDATE products SET name = :name, sector = :sector, cost = :cost, '
+                . 'sale_price = :sale_price, stock = :stock WHERE id = :id'
+            );
+            $parameters['id'] = $id;
+            $message = 'Product updated.';
+        }
+
+        $statement->execute($parameters);
+        redirectWithMessage($message);
+    }
+
+    http_response_code(400);
+    exit('Unknown action.');
+}
+
+$editing = null;
+$editId = filter_input(INPUT_GET, 'edit', FILTER_VALIDATE_INT, [
+    'options' => ['min_range' => 1],
+]);
+if ($editId !== false && $editId !== null) {
+    $statement = $conn->prepare('SELECT * FROM products WHERE id = :id');
+    $statement->execute(['id' => $editId]);
+    $editing = $statement->fetch() ?: null;
+}
+
+$products = $conn->query('SELECT * FROM products ORDER BY id DESC')->fetchAll();
+$message = $_SESSION['message'] ?? null;
+unset($_SESSION['message']);
+?>
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Product Catalog</title>
+</head>
+<body>
+<main>
+    <h1>Product Catalog</h1>
+    <?php if (is_string($message)): ?>
+        <p role="status"><?= escape($message) ?></p>
+    <?php endif; ?>
+
+    <form method="post" action="index.php">
+        <input type="hidden" name="csrf_token" value="<?= escape($_SESSION['csrf_token']) ?>">
+        <input type="hidden" name="action" value="save">
+        <input type="hidden" name="id" value="<?= escape((string) ($editing['id'] ?? '')) ?>">
+        <label>Name <input name="name" maxlength="80" required value="<?= escape((string) ($editing['name'] ?? '')) ?>"></label>
+        <label>Sector
+            <select name="sector" required>
+                <?php foreach (SECTORS as $sector): ?>
+                    <option value="<?= escape($sector) ?>" <?= ($editing['sector'] ?? '') === $sector ? 'selected' : '' ?>><?= escape(strtoupper($sector)) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </label>
+        <label>Cost <input type="number" name="cost" min="0" max="99999999.99" step="0.01" required value="<?= escape((string) ($editing['cost'] ?? '')) ?>"></label>
+        <label>Sale price <input type="number" name="sale_price" min="0" max="99999999.99" step="0.01" required value="<?= escape((string) ($editing['sale_price'] ?? '')) ?>"></label>
+        <label>Stock <input type="number" name="stock" min="0" max="999999" required value="<?= escape((string) ($editing['stock'] ?? '0')) ?>"></label>
+        <button type="submit"><?= $editing === null ? 'Create product' : 'Update product' ?></button>
+        <?php if ($editing !== null): ?><a href="index.php">Cancel</a><?php endif; ?>
     </form>
 
-    <br/>
-    <br/>
-
-    <?php
-    include "conn.php";
-    if(isset($_GET['alterar'])){
-    $id=$_GET['id'];
-    $consu=$conn->prepare('
-    SELECT * FROM `cadastro` 
-    WHERE `id_prod`= :pid;');
-    $consu->bindValue(':pid',$id);
-    
-    $consu->execute();
-    $row=$consu->fetch();
-    
-    ?>    
-    <form action="index.php" method="POST">
-    <input type="hidden" name="id_prod"
-    value="<?php echo $row['id_prod']; ?>">
-    <input type="text" name="nome_prod"
-    placeholder="Nome" value="<?php echo $row['nome_prod'];?>"/><br/>
-    <input type="text" name="setor_prod"
-    placeholder="setor" value="<?php echo $row['setor_prod'];?>"/><br/>
-    <input type="text" name="custo_prod"
-    placeholder="preço de custo" value="<?php echo $row['custo_prod'];?>"/><br/>
-    <input type="text" name="venda_prod"
-    placeholder="preco de venda" value="<?php echo $row['venda_prod'];?>"/><br/>
-    <input type="number" name="estoque_prod"
-    placeholder="estoque" value="<?php echo $row['estoque_prod'];?>"/><br/>
-    <br/>
-    <input type="submit" name="altera"
-    value="Alterar"/>
-
-</form>
-
-<?php
-    }
-include "conn.php";
-
-if(isset($_POST['altera'])){
-    $id=$_POST['id_prod'];
-    $nome=$_POST['nome_prod'];
-    $op=$_POST['setor_prod'];
-    $preco_de_custo=$_POST['custo_prod'];
-    $preco_de_venda=$_POST['venda_prod'];
-    $estoque=$_POST['estoque_prod'];
-    $situacao_do_produto=1;
-
-    $altera=$conn->prepare("
-    UPDATE `cadastro` SET `nome_prod` = :pnome, 
-    `setor_prod` = :psetor, 
-    `custo_prod` = :pcusto, 
-    `venda_prod` = :pvenda, 
-    `estoque_prod` = :pestoque, 
-    `situacao_prod` = :psituacao WHERE 
-    `cadastro`.`id_prod` = :pid;
-    ");
-    $altera->bindvalue(':pid',$id);
-    $altera->bindValue(':pnome',$nome);
-    $altera->bindValue(':psetor',$op);
-    $altera->bindValue(':pvenda',$preco_de_custo);
-    $altera->bindValue(':pcusto',$preco_de_venda);
-    $altera->bindValue(':pestoque',$estoque);
-    $altera->bindvalue(':psituacao',$situacao_do_produto);
-    $altera->execute();
-    echo "Cadastro alterado com sucesso!";
-}
-
-if(isset($_POST['grava'])){
-    $nome=$_POST['ndp'];
-    $op=$_POST['op'];
-    $preco_de_custo=$_POST['pdc'];
-    $preco_de_venda=$_POST['pdv'];
-    $estoque=$_POST['estoque'];
-    $situacao_do_produto=1;
-    $grava=$conn->prepare('INSERT INTO
-     `cadastro` (`id_prod`, `nome_prod`, 
-     `setor_prod`, `custo_prod`, `venda_prod`, `estoque_prod`, `situacao_prod`) VALUES 
-     (NULL, :pnome, :psetor, :pcusto, :pvenda, :pestoque, :psituacao);');
-    $grava->bindValue(':pnome',$nome);
-    $grava->bindValue(':psetor',$op);
-    $grava->bindValue(':pvenda',$preco_de_custo);
-    $grava->bindValue(':pcusto',$preco_de_venda);
-    $grava->bindValue(':pestoque',$estoque);
-    $grava->bindValue(':psituacao',$situacao_do_produto);
-    $grava->execute();
-    echo "Gravado!";
-}
-
-if(isset($_GET['excluir'])){
-    $id=$_GET['id'];
-    $excluir=$conn->prepare('DELETE 
-    FROM cadastro WHERE 
-    `cadastro`.`id_prod` = :pid');
-    $excluir->bindValue(':pid',$id);
-    $excluir->execute();
-    echo "Excluído com sucesso!";
-}
-
-?>
-<table border="1">
-    <tr>
-        <th>Nome do produto</th>
-        <th>Setor do produto</th>
-        <th>Preço de custo</th>
-        <th>Preço de venda</th>
-        <th>Estoque</th>
-        <th></th>
-    </tr>
-    <?php
-    $exibir=$conn->prepare('
-    SELECT * FROM `cadastro`');
-    $exibir->execute();
-    if($exibir->rowCount()==0){
-        echo "Não há registros";
-    }else{
-        while($row=$exibir->fetch()){
-            echo "<tr>";
-            echo "<td>".$row['nome_prod']."</td>";
-            echo "<td>".$row['setor_prod']."</td>";
-            echo "<td>".$row['custo_prod']."</td>";
-            echo "<td>".$row['venda_prod']."</td>";
-            echo "<td>".$row['estoque_prod']."</td>";
-            echo "<td><a href='index.php?excluir&id=".$row['id_prod']."'>Excluir</a></td>";
-            echo "<td><a href='index.php?alterar&id=".$row['id_prod']."'>Alterar</a></td>";
-            echo "</tr>";
-        }
-    }
-    ?>
-</table>
+    <table>
+        <thead><tr><th>Name</th><th>Sector</th><th>Cost</th><th>Sale price</th><th>Stock</th><th>Actions</th></tr></thead>
+        <tbody>
+        <?php foreach ($products as $product): ?>
+            <tr>
+                <td><?= escape((string) $product['name']) ?></td>
+                <td><?= escape((string) $product['sector']) ?></td>
+                <td><?= escape(number_format((float) $product['cost'], 2, '.', '')) ?></td>
+                <td><?= escape(number_format((float) $product['sale_price'], 2, '.', '')) ?></td>
+                <td><?= escape((string) $product['stock']) ?></td>
+                <td>
+                    <a href="?edit=<?= escape((string) $product['id']) ?>">Edit</a>
+                    <form method="post" action="index.php" style="display:inline">
+                        <input type="hidden" name="csrf_token" value="<?= escape($_SESSION['csrf_token']) ?>">
+                        <input type="hidden" name="action" value="delete">
+                        <input type="hidden" name="id" value="<?= escape((string) $product['id']) ?>">
+                        <button type="submit">Delete</button>
+                    </form>
+                </td>
+            </tr>
+        <?php endforeach; ?>
+        <?php if ($products === []): ?>
+            <tr><td colspan="6">No products found.</td></tr>
+        <?php endif; ?>
+        </tbody>
+    </table>
+</main>
+</body>
+</html>
